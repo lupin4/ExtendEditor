@@ -24,9 +24,22 @@ private:
 	TSharedRef<FExtender> CustomCBMenuExtension(const TArray<FString>& SelectedPaths);
 
 	void AddCBMenuEntry(class FMenuBuilder& MenuBuilder);
-
 	void OnDeleteUnusedAssetButtonClicked();
+	void OnDeleteEmptyFoldersButtonClicked();
+	void OnAdvancedDeletionButtonClicked();
 
 	void FixUpRedirectors();
-#pragma endregion 
+
+	
+#pragma endregion
+
+#pragma region CustomEditorTab
+
+	void RegisterAdvancedDeletionTab();
+
+	TSharedRef<SDockTab> OnSpawnAdvanceDeletionTab(const FSpawnTabArgs& SpawnTabArgs);
+
+	TArray<TSharedPtr<FAssetData>> GetAllAssetDataUnderSelectedFolder();
+
+#pragma endregion
 };
