@@ -8,11 +8,14 @@
 #include "ObjectTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Slate/AdvancedDeletionWidget.h"
+#include "CustomStyle/MegaManagerStyle.h"
+
 
 #define LOCTEXT_NAMESPACE "FMegaManagerModule"
 
 void FMegaManagerModule::StartupModule()
 {
+	FMegaManagerStyle::InitializeIcons();
 	InitCBMenuExtension();
 
 	RegisterAdvancedDeletionTab();
@@ -66,7 +69,7 @@ void FMegaManagerModule::AddCBMenuEntry(FMenuBuilder& MenuBuilder)
 	(
 		FText::FromString(TEXT("Delete Unused Assets")),
 		FText::FromString(TEXT("Safely Delete all unused assets within a folder")),
-		FSlateIcon(),
+		FSlateIcon(FMegaManagerStyle::GetStyleSetName(),"ContentBrowser.DeleteUnusedAssets"), //Custom icon
 		FExecuteAction::CreateRaw(this, &FMegaManagerModule::OnDeleteUnusedAssetButtonClicked)
 	);
 
@@ -74,15 +77,15 @@ void FMegaManagerModule::AddCBMenuEntry(FMenuBuilder& MenuBuilder)
 	(
 		FText::FromString(TEXT("Delete Empty Folders")), //Title text for menu entry
 		FText::FromString(TEXT("Safely delete all empty folders")), //Tooltip text
-		FSlateIcon(),	//Custom icon
-		FExecuteAction::CreateRaw(this,&FMegaManagerModule::OnDeleteEmptyFoldersButtonClicked) //The actual function to excute
+		FSlateIcon(FMegaManagerStyle::GetStyleSetName(),"ContentBrowser.DeleteEmptyFolders"), //Custom icon
+		FExecuteAction::CreateRaw(this, &FMegaManagerModule::OnDeleteEmptyFoldersButtonClicked) //The actual function to excute
 	);
 
 	MenuBuilder.AddMenuEntry
 	(
 		FText::FromString(TEXT("Advanced Deletion")),
 		FText::FromString(TEXT("List Assets by speicifc conditions in a new Tab")),
-		FSlateIcon(),
+		FSlateIcon(FMegaManagerStyle::GetStyleSetName(),"ContentBrowser.AdvanceDeletion"),
 		FExecuteAction::CreateRaw(this, &FMegaManagerModule::OnAdvancedDeletionButtonClicked)
 	);
 }
@@ -209,6 +212,7 @@ void FMegaManagerModule::OnDeleteEmptyFoldersButtonClicked()
 
 void FMegaManagerModule::OnAdvancedDeletionButtonClicked()
 {
+	FixUpRedirectors();
 	DebugHeader::Print(TEXT("Advanced Deletion"), FColor::Green);
 	FGlobalTabmanager::Get()->TryInvokeTab(FName("Advanced Deletion"));
 }
@@ -257,7 +261,8 @@ void FMegaManagerModule::RegisterAdvancedDeletionTab()
 {
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(FName("Advanced Deletion"),
 	FOnSpawnTab::CreateRaw(this,&FMegaManagerModule::OnSpawnAdvanceDeletionTab))
-	.SetDisplayName(FText::FromString(TEXT("Advanced Deletion")));
+	.SetDisplayName(FText::FromString(TEXT("Advanced Deletion")))
+	.SetIcon(FSlateIcon(FMegaManagerStyle::GetStyleSetName(),"ContentBrowser.AdvanceDeletion"));;
 }
 
 TSharedRef<SDockTab> FMegaManagerModule::OnSpawnAdvanceDeletionTab(const FSpawnTabArgs &SpawnTabArgs)
@@ -267,12 +272,13 @@ TSharedRef<SDockTab> FMegaManagerModule::OnSpawnAdvanceDeletionTab(const FSpawnT
 			[
 				SNew(SAdvancedDeletionTab)
 				.AssetsDataToStore(GetAllAssetDataUnderSelectedFolder())
+				.CurrentSelectedFolder(FolderPathsSelected[0])
 			];
 	}
 
 TArray<TSharedPtr<FAssetData>> FMegaManagerModule::GetAllAssetDataUnderSelectedFolder()
 {
-	TArray< TSharedPtr <FAssetData> > AvaiableAssetsData;
+	TArray< TSharedPtr <FAssetData> > AvailableAssetsData;
 
 	TArray<FString> AssetsPathNames = UEditorAssetLibrary::ListAssets(FolderPathsSelected[0]);
 
@@ -291,20 +297,106 @@ TArray<TSharedPtr<FAssetData>> FMegaManagerModule::GetAllAssetDataUnderSelectedF
 
 		const FAssetData Data = UEditorAssetLibrary::FindAssetData(AssetPathName);
 
-		AvaiableAssetsData.Add(MakeShared<FAssetData>(Data));
+		AvailableAssetsData.Add(MakeShared<FAssetData>(Data));
 	}
 
-	return AvaiableAssetsData;
+	return AvailableAssetsData;
 }
-	
+
+
+
 
 #pragma endregion
 
+
+#pragma region ProcessDataForAdvancedDeletionTab
+
+bool FMegaManagerModule::DeleteSingleAssetForAssetList(const FAssetData* AssetDataToDelete)
+{
+	TArray<FAssetData> AssetDataForDeletion;
+	AssetDataForDeletion.Add(*AssetDataToDelete);
+	if (ObjectTools::DeleteAssets(AssetDataForDeletion)>0)
+	{
+		return true;
+		
+	}
+	else return false;
+}
+
+bool FMegaManagerModule::DeleteMultipleAssetsForAssetList(const TArray<FAssetData>& AssetsToDelete)
+{
+	if(	ObjectTools::DeleteAssets(AssetsToDelete)>0)
+	{
+		return true;
+	}
+	return false;
+}
+
+void FMegaManagerModule::ListUnusedAssetsForAssetList(const TArray<TSharedPtr<FAssetData>>& AssetsDataToFilter,
+	TArray<TSharedPtr<FAssetData>>& OutUnusedAssetsData)
+{
+	OutUnusedAssetsData.Empty();
+	for(const TSharedPtr<FAssetData>& DataSharedPtr : AssetsDataToFilter)
+	{
+		FString AssetPath = DataSharedPtr->GetAsset()->GetPathName();
+		TArray<FString> AssetReferencers = 
+		UEditorAssetLibrary::FindPackageReferencersForAsset(AssetPath);
+
+		if(AssetReferencers.Num()==0)
+		{
+			OutUnusedAssetsData.Add(DataSharedPtr);
+		}
+	}
+}
+
+void FMegaManagerModule::ListSameNameAssetsForAssetList(const TArray<TSharedPtr<FAssetData>>& AssetsDataToFilter,
+	TArray<TSharedPtr<FAssetData>>& OutSameNameAssetsData)
+{
+	OutSameNameAssetsData.Empty();
+	
+	//Multimap for supporting finding assets with same name
+	TMultiMap<FString, TSharedPtr<FAssetData> > AssetsInfoMultiMap;
+
+	for(const TSharedPtr<FAssetData>& DataSharedPtr:AssetsDataToFilter)
+	{
+		AssetsInfoMultiMap.Emplace(DataSharedPtr->AssetName.ToString(), DataSharedPtr);
+	}
+
+	for(const TSharedPtr<FAssetData>& DataSharedPtr:AssetsDataToFilter)
+	{	
+		TArray< TSharedPtr <FAssetData> > OutAssetsData;
+		AssetsInfoMultiMap.MultiFind(DataSharedPtr->AssetName.ToString(), OutAssetsData);
+
+		if(OutAssetsData.Num()<=1) continue;
+
+		for(const TSharedPtr<FAssetData>& SameNameData:OutAssetsData)
+		{
+			if(SameNameData.IsValid())
+			{
+				OutSameNameAssetsData.AddUnique(SameNameData);
+			}
+		}
+	}	
+}
+
+void FMegaManagerModule::SyncCBToClickedAssetForAssetList(const FString& AssetPathToSync)
+{
+	TArray<FString> AssetPathsToSync;
+	AssetPathsToSync.Add(AssetPathToSync);
+	UEditorAssetLibrary::SyncBrowserToObjects(AssetPathsToSync);
+}
+
+
+#pragma endregion	
 
 void FMegaManagerModule::ShutdownModule()
 	{
 		// This function may be called during shutdown to clean up your module.  For modules that support dynamic reloading,
 		// we call this function before unloading the module.
+
+		//Cleans up the Tab Manager
+		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(FName("Advanced Deletion"));
+		FMegaManagerStyle::ShutDown();
 	}
 
 
